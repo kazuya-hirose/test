@@ -2,7 +2,6 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from datetime import datetime
 import os
-import glob
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -13,16 +12,6 @@ from bs4 import BeautifulSoup
 import time
 import pykakasi
 import re
-
-
-def find_latest_anime_file():
-    """最新のアニメデータExcelファイルを検出"""
-    files = glob.glob("anime_data_*.xlsx")
-    if files:
-        # 最新ファイルを取得
-        latest_file = max(files, key=os.path.getctime)
-        return latest_file
-    return None
 
 
 def extract_hiragana_first_char(text):
@@ -273,6 +262,9 @@ def scrape_anime_from_url(url):
                 
                 # タイトルが空ではなく、一定の長さがある場合
                 if title_text and len(title_text) > 1:
+                    # 「再放送」を含む作品は除外
+                    if '再放送' in title_text:
+                        continue
                     # 重複チェック
                     if not any(a['作品名'] == title_text for a in anime_list):
                         # 詳細情報を抽出
@@ -296,6 +288,9 @@ def scrape_anime_from_url(url):
                 for link in links:
                     title_text = link.get_text(strip=True)
                     if title_text and len(title_text) > 1:
+                        # 「再放送」を含む作品は除外
+                        if '再放送' in title_text:
+                            continue
                         if not any(a['作品名'] == title_text for a in anime_list):
                             details = extract_anime_details(soup, title_text)
                             anime_list.append({
@@ -470,6 +465,83 @@ def interactive_input():
     return anime_list
 
 
+def add_sheet_to_workbook(filename, sheet_name, anime_list):
+    """既存のWorkbookに新しいシートを追加"""
+    try:
+        # ファイルが存在するかチェック
+        if os.path.exists(filename):
+            wb = openpyxl.load_workbook(filename)
+        else:
+            wb = openpyxl.Workbook()
+            # デフォルトシートを削除
+            if 'Sheet' in wb.sheetnames:
+                del wb['Sheet']
+        
+        # シート名が既に存在する場合は新しい名前に変更
+        if sheet_name in wb.sheetnames:
+            # 既存シートを削除
+            del wb[sheet_name]
+        
+        # 新しいシートを作成
+        ws = wb.create_sheet(sheet_name)
+        
+        # ヘッダー行
+        headers = ['作品名', '頭文字', '放送年・期', 'OP曲', 'OP歌手', 'ED曲', 'ED歌手']
+        ws.append(headers)
+        
+        # ヘッダースタイル
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF", size=12)
+        header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        
+        thin_border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+        
+        for cell in ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = header_alignment
+            cell.border = thin_border
+        
+        # 列幅を設定
+        ws.column_dimensions['A'].width = 30
+        ws.column_dimensions['B'].width = 3
+        ws.column_dimensions['C'].width = 15
+        ws.column_dimensions['D'].width = 25
+        ws.column_dimensions['E'].width = 20
+        ws.column_dimensions['F'].width = 25
+        ws.column_dimensions['G'].width = 20
+        
+        # データを追加
+        for idx, anime in enumerate(anime_list):
+            row = idx + 2
+            ws[f'A{row}'] = anime.get('作品名', '')
+            ws[f'B{row}'] = anime.get('頭文字', '')
+            ws[f'C{row}'] = anime.get('放送年・期', '')
+            ws[f'D{row}'] = anime.get('OP曲', '')
+            ws[f'E{row}'] = anime.get('OP歌手', '')
+            ws[f'F{row}'] = anime.get('ED曲', '')
+            ws[f'G{row}'] = anime.get('ED歌手', '')
+            
+            # セルのボーダーを設定
+            for col in range(1, 8):
+                cell = ws.cell(row=row, column=col)
+                cell.border = thin_border
+                cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+        
+        wb.save(filename)
+        print(f"✓ {len(anime_list)}件のデータを追加しました")
+        return filename
+    
+    except Exception as e:
+        print(f"エラー: {e}")
+        return None
+
+
 def main():
     print("\n" + "=" * 60)
     print("アニメ情報管理ツール（Excel出力 + URL スクレイピング）")
@@ -478,8 +550,8 @@ def main():
     # メニュー表示
     while True:
         print("\n【メニュー】")
-        print("1. URLからスクレイピング → 新規Excelファイルに保存")
-        print("2. 手動入力 → 新規Excelファイルに保存")
+        print("1. URLからスクレイピング → 固定Excelファイルにシート追加")
+        print("2. 手動入力 → 固定Excelファイルにシート追加")
         print("3. 終了")
         
         choice = input("\n選択してください（1-3）: ").strip()
@@ -494,7 +566,7 @@ def main():
             anime_list = scrape_anime_from_url(url)
             
             if anime_list:
-                print("\n【スクレイピング結果】")
+                print(f"\n【スクレイピング結果】({len(anime_list)}件、再放送除外済み)")
                 for idx, anime in enumerate(anime_list, 1):
                     print(f"{idx}. {anime['作品名']} ({anime['頭文字']})")
                     if anime['OP曲']:
@@ -502,7 +574,34 @@ def main():
                     if anime['ED曲']:
                         print(f"    ED: 「{anime['ED曲']}」{anime['ED歌手']}")
                 
-                # ファイル名を自動生成
+                # 放送年・期情報とシート名を生成
+                broadcast_info = ""
+                for anime in anime_list:
+                    if anime['放送年・期']:
+                        broadcast_info = anime['放送年・期'].replace('年', '').replace('アニメ', '')
+                        break
+                
+                # シート名を生成（「2026春_0429」形式）
+                date_str = datetime.now().strftime('%m%d')
+                if broadcast_info:
+                    sheet_name = f"{broadcast_info}_{date_str}"
+                else:
+                    sheet_name = f"unnamed_{date_str}"
+                
+                # 固定ファイル名
+                filename = "anime_data.xlsx"
+                
+                # シートを追加
+                result = add_sheet_to_workbook(filename, sheet_name, anime_list)
+                if result:
+                    print(f"✓ ファイルを作成/更新しました: {result}")
+                    print(f"  シート名: {sheet_name}")
+        
+        elif choice == '2':
+            # 手動入力 → 固定ファイルにシート追加
+            anime_list = interactive_input()
+            
+            if anime_list:
                 # 放送年・期情報を取得
                 broadcast_info = ""
                 for anime in anime_list:
@@ -510,39 +609,21 @@ def main():
                         broadcast_info = anime['放送年・期'].replace('年', '').replace('アニメ', '')
                         break
                 
+                # シート名を生成（「2026春_0429」形式）
+                date_str = datetime.now().strftime('%m%d')
                 if broadcast_info:
-                    filename = f"anime_data_{broadcast_info}_{len(anime_list)}件_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                    sheet_name = f"{broadcast_info}_{date_str}"
                 else:
-                    filename = f"anime_data_{len(anime_list)}件_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                    sheet_name = f"unnamed_{date_str}"
                 
-                # ファイル作成
-                created_file = create_anime_template(filename)
-                if created_file:
-                    add_anime_data(created_file, anime_list)
-                    print(f"✓ ファイルを作成しました: {created_file}")
-        
-        elif choice == '2':
-            # 手動入力 → 新規ファイル作成
-            anime_list = interactive_input()
-            
-            if anime_list:
-                # ファイル名を自動生成
-                broadcast_info = ""
-                for anime in anime_list:
-                    if anime['放送年・期']:
-                        broadcast_info = anime['放送年・期'].replace('年', '').replace('アニメ', '')
-                        break
+                # 固定ファイル名
+                filename = "anime_data.xlsx"
                 
-                if broadcast_info:
-                    filename = f"anime_data_{broadcast_info}_{len(anime_list)}件_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-                else:
-                    filename = f"anime_data_{len(anime_list)}件_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-                
-                # ファイル作成
-                created_file = create_anime_template(filename)
-                if created_file:
-                    add_anime_data(created_file, anime_list)
-                    print(f"✓ ファイルを作成しました: {created_file}")
+                # シートを追加
+                result = add_sheet_to_workbook(filename, sheet_name, anime_list)
+                if result:
+                    print(f"✓ ファイルを作成/更新しました: {result}")
+                    print(f"  シート名: {sheet_name}")
         
         elif choice == '3':
             print("終了します。")
