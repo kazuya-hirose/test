@@ -11,6 +11,8 @@ from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.service import Service
 from bs4 import BeautifulSoup
 import time
+import pykakasi
+import re
 
 
 def find_latest_anime_file():
@@ -102,6 +104,55 @@ def extract_hiragana_first_char(text):
     # 数字の場合
     if first_char.isdigit():
         return 'す'  # 数字は「すう」のす
+    
+    # 漢字の場合はpykakasiで変換
+    try:
+        kakasi = pykakasi.kakasi()
+        
+        # 複合漢字パターンを抽出（連続した複数の漢字）
+        # 最初の漢字から始まる連続した漢字をまとめる
+        kanji_count = 0
+        for i, char in enumerate(text):
+            if '\u4e00' <= char <= '\u9fff':  # 漢字の範囲
+                kanji_count += 1
+            else:
+                break
+        
+        # 複合漢字がある場合は3文字までを試す
+        if kanji_count >= 2:
+            # 複合漢字を複数まとめて処理（最大3文字）
+            for length in [min(3, kanji_count), 2]:
+                compound = text[:length]
+                result = kakasi.convert(compound)
+                if result and len(result) > 0:
+                    # 複合要素として認識されたかチェック
+                    first_elem = result[0]
+                    if len(first_elem.get('orig', '')) >= 2:
+                        # 複合要素として認識された場合
+                        hira = first_elem.get('hira', '')
+                        if hira:
+                            return hira[0]
+            
+            # 複合漢字が分割された場合は、複数要素を統合してみる
+            result = kakasi.convert(text[:kanji_count])
+            if result and len(result) > 0:
+                # すべての要素のひらがなを連結して最初の文字を取得
+                all_hira = ''
+                for elem in result:
+                    hira = elem.get('hira', '')
+                    if hira and '\u4e00' <= elem.get('orig', '')[0] <= '\u9fff':
+                        all_hira += hira
+                if all_hira:
+                    return all_hira[0]
+        
+        # 単一の漢字の場合
+        result = kakasi.convert(first_char)
+        if result and len(result) > 0:
+            hira = result[0].get('hira', '')
+            if hira:
+                return hira[0]  # 最初の文字を返す
+    except:
+        pass
     
     # その他の場合は「そ」
     return 'そ'
@@ -451,14 +502,18 @@ def main():
                     if anime['ED曲']:
                         print(f"    ED: 「{anime['ED曲']}」{anime['ED歌手']}")
                 
-                # 新規ファイルを作成
-                file_input = input("\nファイル名（デフォルト: anime_data_yyyymmdd_hhmmss.xlsx）: ").strip()
-                if not file_input:
-                    filename = f"anime_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-                elif file_input.endswith('.xlsx'):
-                    filename = file_input
+                # ファイル名を自動生成
+                # 放送年・期情報を取得
+                broadcast_info = ""
+                for anime in anime_list:
+                    if anime['放送年・期']:
+                        broadcast_info = anime['放送年・期'].replace('年', '').replace('アニメ', '')
+                        break
+                
+                if broadcast_info:
+                    filename = f"anime_data_{broadcast_info}_{len(anime_list)}件_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
                 else:
-                    filename = file_input + '.xlsx'
+                    filename = f"anime_data_{len(anime_list)}件_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
                 
                 # ファイル作成
                 created_file = create_anime_template(filename)
@@ -471,13 +526,17 @@ def main():
             anime_list = interactive_input()
             
             if anime_list:
-                file_input = input("\nファイル名（デフォルト: anime_data_yyyymmdd_hhmmss.xlsx）: ").strip()
-                if not file_input:
-                    filename = f"anime_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-                elif file_input.endswith('.xlsx'):
-                    filename = file_input
+                # ファイル名を自動生成
+                broadcast_info = ""
+                for anime in anime_list:
+                    if anime['放送年・期']:
+                        broadcast_info = anime['放送年・期'].replace('年', '').replace('アニメ', '')
+                        break
+                
+                if broadcast_info:
+                    filename = f"anime_data_{broadcast_info}_{len(anime_list)}件_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
                 else:
-                    filename = file_input + '.xlsx'
+                    filename = f"anime_data_{len(anime_list)}件_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
                 
                 # ファイル作成
                 created_file = create_anime_template(filename)
